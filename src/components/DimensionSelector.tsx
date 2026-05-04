@@ -24,6 +24,7 @@ interface DimensionSelectorProps {
   canStartReview: boolean; // 是否可以开始审查
   onToggleDimension: (dimension: ReviewDimension) => void; // 切换维度选中状态的回调函数
   onStartReview: () => void; // 开始审查的回调函数
+  onCancelReview: () => void; // 取消审查的回调函数
 }
 
 /**
@@ -48,6 +49,7 @@ export function DimensionSelector({
   canStartReview, // 是否可以开始审查
   onToggleDimension, // 切换维度的处理函数
   onStartReview, // 开始审查的处理函数
+  onCancelReview, // 取消审查的处理函数
 }: DimensionSelectorProps) {
   return (
     <section className="panel controls-panel">
@@ -70,18 +72,28 @@ export function DimensionSelector({
           );
         })}
       </div>
-
-      {/* 开始审查按钮 */}
-      <button
-        type="button"
-        className="start-review-btn"
-        onClick={onStartReview} // 点击时触发开始审查
-        disabled={!canStartReview} // 当不满足开始审查条件时禁用
-      >
-        <Play size={16} />
-        {isReviewing ? "Reviewing..." : "Start Review"}{" "}
-        {/* 根据审查状态显示不同文本 */}
-      </button>
+      <div className="" style={{ display: "flex", gap: 12, marginTop: 16 }}>
+        {/* 开始审查按钮 */}
+        <button
+          type="button"
+          className="start-review-btn"
+          onClick={onStartReview} // 点击时触发开始审查
+          disabled={!canStartReview} // 当不满足开始审查条件时禁用
+        >
+          <Play size={16} />
+          {isReviewing ? "Reviewing..." : "Start Review"}{" "}
+          {/* 根据审查状态显示不同文本 */}
+        </button>
+        {isReviewing && (
+          <button
+            onClick={onCancelReview}
+            type="button"
+            className="start-review-btn"
+          >
+            取消
+          </button>
+        )}
+      </div>
     </section>
   );
 }
