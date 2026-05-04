@@ -3,7 +3,7 @@
  * 提供代码编辑、维度选择、结果展示等功能
  */
 import { useMemo, useState } from "react";
-import { startReview } from "./services/reviewService"; // 导入代码审查服务
+import { startReviewWithRetry } from "./services/reviewService"; // 导入代码审查服务
 import { autoDetectLanguage } from "./utils/codeUtils"; // 导入语言自动检测工具
 import type { ReviewDimension, ReviewResponse } from "./types/review"; // 导入审查相关的类型定义
 import { useRef } from "react"; // 导入 useRef 用于创建可变引用
@@ -45,9 +45,8 @@ export default function App() {
   const [reviewData, setReviewData] = useState<ReviewResponse | null>(null); // 审查结果数据
   const [error, setError] = useState<string | null>(null); // 错误信息
   const [toastMessage, setToastMessage] = useState<string | null>(null); // Toast提示信息
-// 用户暂停审查
-const abortControllerRef = useRef<AbortController | null>(null);
-
+  // 用户暂停审查
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   // 自动检测代码语言
   const language = useMemo(() => autoDetectLanguage(code), [code]);
@@ -92,21 +91,21 @@ const abortControllerRef = useRef<AbortController | null>(null);
   // 处理开始审查
   const handleStartReview = async () => {
     // 如果有正在进行的审查，先取消它
-   if(abortControllerRef.current){
-    abortControllerRef.current.abort();
-   }
- // 创建新的 AbortController
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    // 创建新的 AbortController
     const controller = new AbortController();
     abortControllerRef.current = controller;
 
-  // 开始审查
+    // 开始审查
     setIsReviewing(true);
     setError(null);
     setReviewData(null);
     setStreamedText("");
 
     try {
-      const result = await startReview({
+      const result = await startReviewWithRetry({
         code,
         dimensions: selectedDimensions,
         onChunk: (chunk) => setStreamedText((prev) => prev + chunk), // 处理流式数据
@@ -115,9 +114,12 @@ const abortControllerRef = useRef<AbortController | null>(null);
       setReviewData(result);
     } catch (reviewError) {
       // 检查是否是用户取消审查
-      if (reviewError instanceof DOMException && reviewError.name === "AbortError") {
+      if (
+        reviewError instanceof DOMException &&
+        reviewError.name === "AbortError"
+      ) {
         showToast("审查已取消");
-          setStreamedText((prev) => prev + '\n[已取消]');
+        setStreamedText((prev) => prev + "\n[已取消]");
         return;
       }
       const message =
