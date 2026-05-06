@@ -2,11 +2,10 @@
  * 代码审查应用主组件
  * 提供代码编辑、维度选择、结果展示等功能
  */
-import { useMemo, useState } from "react";
-import { startReviewWithRetry } from "./services/reviewService"; // 导入代码审查服务
-import { autoDetectLanguage } from "./utils/codeUtils"; // 导入语言自动检测工具
-import type { ReviewDimension, ReviewResponse } from "./types/review"; // 导入审查相关的类型定义
-import { useRef } from "react"; // 导入 useRef 用于创建可变引用
+import { useMemo, useState, useCallback, useEffect, useRef } from "react";
+import { startReviewWithRetry } from "./services/reviewService";
+import { autoDetectLanguage } from "./utils/codeUtils";
+import type { ReviewDimension, ReviewResponse } from "./types/review";
 import {
   AppHeader,
   Toast,
@@ -14,7 +13,7 @@ import {
   DimensionSelector,
   ReviewResult,
   FixExamples,
-} from "./components"; // 导入所有组件
+} from "./components";
 
 // 初始示例代码
 const placeholderCode = `function renderUserComment(comment) {
@@ -30,55 +29,33 @@ const placeholderCode = `function renderUserComment(comment) {
   }
 }`;
 
-/**
- * 应用主组件
- * @returns {JSX.Element} 渲染的应用界面
- */
 export default function App() {
-  // 状态管理
-  const [code, setCode] = useState(placeholderCode); // 当前编辑的代码
-  const [selectedDimensions, setSelectedDimensions] = useState<
-    ReviewDimension[]
-  >(["Performance", "Security"]); // 选中的审查维度
-  const [isReviewing, setIsReviewing] = useState(false); // 是否正在审查中
-  const [streamedText, setStreamedText] = useState(""); // 流式审查结果文本
-  const [reviewData, setReviewData] = useState<ReviewResponse | null>(null); // 审查结果数据
-  const [error, setError] = useState<string | null>(null); // 错误信息
-  const [toastMessage, setToastMessage] = useState<string | null>(null); // Toast提示信息
-  // 用户暂停审查
+  // ========== 状态管理 ==========
+  const [code, setCode] = useState(placeholderCode);
+  const [selectedDimensions, setSelectedDimensions] = useState<ReviewDimension[]>([
+    "Performance",
+    "Security",
+  ]);
+  const [isReviewing, setIsReviewing] = useState(false);
+  const [streamedText, setStreamedText] = useState("");
+  const [reviewData, setReviewData] = useState<ReviewResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  // ========== Ref 管理 ==========
   const abortControllerRef = useRef<AbortController | null>(null);
 
-  // 自动检测代码语言
-  const language = useMemo(() => autoDetectLanguage(code), [code]);
+  // requestAnimationFrame 批量更新相关
+  const pendingChunksRef = useRef<string>("");
+  const rafIdRef = useRef<number | null>(null);
 
-  // 判断是否可以开始审查
-  const canStartReview = useMemo(
-    () =>
-      code.trim().length > 0 && selectedDimensions.length > 0 && !isReviewing,
-    [code, selectedDimensions, isReviewing],
-  );
-
-  // 切换审查维度
-  const toggleDimension = (dimension: ReviewDimension) => {
-    setSelectedDimensions(
-      (prev) =>
-        prev.includes(dimension)
-          ? prev.filter((item) => item !== dimension) // 如果已选中，则移除
-          : [...prev, dimension], // 如果未选中，则添加
-    );
-  };
-
-  // 显示Toast提示
+  // ========== 辅助函数 ==========
   const showToast = (message: string) => {
     setToastMessage(message);
   };
-
-  // 关闭Toast提示
   const closeToast = () => {
     setToastMessage(null);
   };
-
-  // 复制文本到剪贴板
   const copyToClipboard = async (text: string) => {
     try {
       await navigator.clipboard.writeText(text);
@@ -88,57 +65,108 @@ export default function App() {
     }
   };
 
-  // 处理开始审查
+  // 自动检测代码语言
+  const language = useMemo(() => autoDetectLanguage(code), [code]);
+
+  // 判断是否可以开始审查
+  const canStartReview = useMemo(
+    () => code.trim().length > 0 && selectedDimensions.length > 0 && !isReviewing,
+    [code, selectedDimensions, isReviewing]
+  );
+
+  // ========== requestAnimationFrame 批量更新调度 ==========
+  const scheduleUpdate = useCallback(() => {
+    if (rafIdRef.current !== null) return; // 已有待处理任务
+    rafIdRef.current = requestAnimationFrame(() => {
+      setStreamedText((prev) => {
+        const newText = prev + pendingChunksRef.current;
+        pendingChunksRef.current = ""; // 清空缓冲区
+        return newText;
+      });
+      rafIdRef.current = null;
+    });
+  }, []);
+
+  // 组件卸载时取消未执行的 raf
+  useEffect(() => {
+    return () => {
+      if (rafIdRef.current !== null) {
+        cancelAnimationFrame(rafIdRef.current);
+      }
+    };
+  }, []);
+
+  // ========== 核心操作 ==========
+  const toggleDimension = (dimension: ReviewDimension) => {
+    setSelectedDimensions((prev) =>
+      prev.includes(dimension)
+        ? prev.filter((item) => item !== dimension)
+        : [...prev, dimension]
+    );
+  };
+
   const handleStartReview = async () => {
-    // 如果有正在进行的审查，先取消它
+    // 取消之前的审查请求（如果有）
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
     }
-    // 创建新的 AbortController
-    const controller = new AbortController();
-    abortControllerRef.current = controller;
-
-    // 开始审查
+    // 清空之前的动画帧任务
+    if (rafIdRef.current !== null) {
+      cancelAnimationFrame(rafIdRef.current);
+      rafIdRef.current = null;
+    }
+    pendingChunksRef.current = "";
+    // 重置状态
     setIsReviewing(true);
     setError(null);
     setReviewData(null);
     setStreamedText("");
 
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     try {
       const result = await startReviewWithRetry({
         code,
         dimensions: selectedDimensions,
-        onChunk: (chunk) => setStreamedText((prev) => prev + chunk), // 处理流式数据
-        signal: controller.signal, // 传递 AbortController 信号
+        onChunk: (chunk: string) => {
+          // 将新到达的字符放入缓冲区，并调度一次批量更新
+          pendingChunksRef.current += chunk;
+          scheduleUpdate();
+        },
+        signal: controller.signal,
       });
+      // 审查成功完成后，强制提交最后可能残留的缓冲区内容
+      if (rafIdRef.current !== null) {
+        cancelAnimationFrame(rafIdRef.current);
+        rafIdRef.current = null;
+        setStreamedText((prev) => prev + pendingChunksRef.current);
+        pendingChunksRef.current = "";
+      }
       setReviewData(result);
     } catch (reviewError) {
-      // 检查是否是用户取消审查
-      if (
-        reviewError instanceof DOMException &&
-        reviewError.name === "AbortError"
-      ) {
+      // 处理用户主动取消
+      if (reviewError instanceof DOMException && reviewError.name === "AbortError") {
         showToast("审查已取消");
         setStreamedText((prev) => prev + "\n[已取消]");
-        return;
+      } else {
+        const message =
+          reviewError instanceof Error ? reviewError.message : "Unknown review error";
+        setError(`审查失败: ${message}`);
       }
-      const message =
-        reviewError instanceof Error
-          ? reviewError.message
-          : "Unknown review error";
-      setError(`Review failed: ${message}`);
     } finally {
       setIsReviewing(false);
-      // 重置 AbortController 引用
       abortControllerRef.current = null;
     }
   };
+
   const handleCancel = () => {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
     }
   };
-  // 渲染应用界面
+
+  // ========== 渲染 ==========
   return (
     <main className="app-shell">
       <AppHeader />
